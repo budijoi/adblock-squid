@@ -18,6 +18,7 @@ Semua request DNS dari perangkat lain akan dicegat oleh **dnsmasq**. Domain ikla
 - **Auto-update** — adblock list diperbarui otomatis setiap jam 3 pagi
 - **Ringan** — hanya butuh ~100 MB RAM untuk dnsmasq + Squid
 - **Plug & Play** — set DNS dan/atau proxy di perangkat lain, langsung jalan
+- **Conflict Detection** — otomatis deteksi & nonaktifkan service lain (Pi-hole, Bind9, Privoxy, dll) yang bisa konflik
 
 ---
 
@@ -75,6 +76,7 @@ sudo bash /tmp/install.sh
 ```
 
 Installer akan:
+0. **Deteksi konflik** — Pi-hole, AdGuard Home, Bind9, Unbound, systemd-resolved, Privoxy, dll → backup config & nonaktifkan
 1. Mendeteksi IP dan subnet LAN
 2. Install **dnsmasq** + konfigurasi adblock
 3. Install **Squid** dengan tuning cache
@@ -240,13 +242,20 @@ Sumber blocklist:
 
 ## Troubleshooting
 
+### Konflik Service
+
+| Masalah | Penyebab | Solusi |
+|---|---|---|
+| Installer mendeteksi "Service/port konflik ditemukan" | Ada service DNS/proxy lain | Installer akan backup & nonaktifkan otomatis (setelah konfirmasi) |
+| Pi-hole, AdGuard Home, Bind9 berhenti setelah install | Dinonaktifkan installer untuk hindari konflik port | Backup config tersimpan, jalankan manual jika ingin revert |
+
 ### AdBlocker
 
 | Masalah | Penyebab | Solusi |
 |---|---|---|
 | `nslookup` timeout | Port 53 diblokir firewall | `sudo ufw allow 53/tcp && sudo ufw allow 53/udp` |
 | DNS tidak merespon | systemd-resolved konflik | `sudo systemctl disable --now systemd-resolved` |
-| Iklan masih muncul | Belum ada di blocklist | Update: `sudo bash update-adblock.sh` |
+| Iklan masih muncul | Belum ada di blocklist | Update: `sudo bash /usr/local/bin/update-adblock.sh` |
 | Address already in use | Port 53 dipakai | `sudo lsof -i :53`, matikan service konflik |
 
 ### Cache Proxy
