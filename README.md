@@ -248,6 +248,8 @@ Sumber blocklist:
 |---|---|---|
 | Installer mendeteksi "Service/port konflik ditemukan" | Ada service DNS/proxy lain | Installer akan backup & nonaktifkan otomatis (setelah konfirmasi) |
 | Pi-hole, AdGuard Home, Bind9 berhenti setelah install | Dinonaktifkan installer untuk hindari konflik port | Backup config tersimpan, jalankan manual jika ingin revert |
+| Squid WARNING: "is a subnetwork of" | Subnet LAN sudah tercakup range `192.168.0.0/16` | Installer otomatis skip subnet redundan. Jika manual, hapus baris `acl localnet src 192.168.x.0/24` dari `/etc/squid/squid.conf` |
+| Squid "stop-sigterm timed out. Killing" | Squid lambat merespon sinyal stop | Sudah dihandle installer dengan `pkill -9` fallback |
 
 ### AdBlocker
 

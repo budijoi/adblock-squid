@@ -171,6 +171,11 @@ if [ ${#CONFLICTS[@]} -gt 0 ]; then
                 bind9)    [ -f /etc/bind/named.conf ] && cp /etc/bind/named.conf "/etc/bind/named.conf.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null || true ;;
             esac
             systemctl stop "$svc" 2>/dev/null || true
+            # Paksa kill jika stop timeout (sering terjadi pada Squid)
+            if systemctl is-active --quiet "$svc" 2>/dev/null; then
+                pkill -9 "$svc" 2>/dev/null || true
+                sleep 1
+            fi
             systemctl disable "$svc" 2>/dev/null || true
             echo -e "  ${DIM}→ $svc dihentikan & dinonaktifkan${NC}"
         fi
@@ -270,6 +275,20 @@ else
     show_progress "Tidak ada config lama"
 fi
 
+# Cek apakah subnet sudah tercakup range RFC1918 (hindari warning Squid)
+subnet_covered_by_rfc1918() {
+    case "$1" in
+        10.*)           return 0 ;;
+        192.168.*)      return 0 ;;
+        172.1[6-9].*|172.2[0-9].*|172.3[0-1].*) return 0 ;;
+        100.6[4-9].*|100.1[0-1][0-9].*|100.12[0-7].*) return 0 ;;
+        169.254.*)      return 0 ;;
+        fc*|fd*)        return 0 ;;
+        fe80:*)         return 0 ;;
+    esac
+    return 1
+}
+
 # Tulis konfigurasi Squid baru — dengan DNS指向 ke dnsmasq lokal
 cat > "$SQUID_CONF" << CONFEOFB
 # === Auto-generated Squid Config (AdBlock + Cache) ===
@@ -284,7 +303,14 @@ acl localnet src 172.16.0.0/12
 acl localnet src 192.168.0.0/16
 acl localnet src fc00::/7
 acl localnet src fe80::/10
-acl localnet src $SUBNET
+CONFEOFB
+
+# Tambah subnet spesifik hanya jika tidak tercakup range di atas
+if ! subnet_covered_by_rfc1918 "$SUBNET"; then
+    echo "acl localnet src $SUBNET" >> "$SQUID_CONF"
+fi
+
+cat >> "$SQUID_CONF" << CONFEOFB
 
 # Port aman
 acl SSL_ports port 443
