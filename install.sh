@@ -86,12 +86,107 @@ else
 fi
 echo ""
 
+# === DETEKSI KONFLIK SERVICE ===
+echo -e "${BLUE}${BOLD}━━━ CONFLICT DETECTION ━━━${NC}"
+
+detect_conflicts() {
+    local conflicts=()
+
+    # DNS/adblock services (port 53)
+    for svc in systemd-resolved pihole-FTL adguardhome bind9 unbound stubby dnscrypt-proxy dnsmasq; do
+        if systemctl is-active --quiet "$svc" 2>/dev/null; then
+            conflicts+=("$svc (running)")
+        elif systemctl is-enabled --quiet "$svc" 2>/dev/null; then
+            conflicts+=("$svc (enabled, not running)")
+        fi
+    done
+
+    # Proxy services (port 3128)
+    for svc in privoxy tinyproxy haproxy squid; do
+        if systemctl is-active --quiet "$svc" 2>/dev/null; then
+            conflicts+=("$svc (running)")
+        elif systemctl is-enabled --quiet "$svc" 2>/dev/null; then
+            conflicts+=("$svc (enabled, not running)")
+        fi
+    done
+
+    # Pi-hole via binary check
+    if command -v pihole &> /dev/null && ! systemctl is-enabled --quiet pihole-FTL 2>/dev/null; then
+        conflicts+=("pihole (binary terinstall)")
+    fi
+
+    # AdGuard Home via binary check
+    if [ -f /opt/AdGuardHome/AdGuardHome ] && ! systemctl is-enabled --quiet adguardhome 2>/dev/null; then
+        conflicts+=("AdGuard Home (binary terinstall)")
+    fi
+
+    # Cek port occupancy (tanpa netstat/ss fallback)
+    local port53 port3128
+    if command -v ss &> /dev/null; then
+        port53=$(ss -tlnp 2>/dev/null | grep ':53 ' | head -1)
+        port3128=$(ss -tlnp 2>/dev/null | grep ':3128 ' | head -1)
+    elif command -v netstat &> /dev/null; then
+        port53=$(netstat -tlnp 2>/dev/null | grep ':53 ' | head -1)
+        port3128=$(netstat -tlnp 2>/dev/null | grep ':3128 ' | head -1)
+    fi
+
+    if [ -n "$port53" ]; then
+        local proc53
+        proc53=$(echo "$port53" | grep -oP 'pid=\K[0-9]+|users:\(\("\K[^"]+' | head -1)
+        conflicts+=("Port 53: $port53")
+    fi
+    if [ -n "$port3128" ]; then
+        conflicts+=("Port 3128: $port3128")
+    fi
+
+    printf '%s\n' "${conflicts[@]}"
+}
+
+# Collect conflicts
+mapfile -t CONFLICTS < <(detect_conflicts)
+
+if [ ${#CONFLICTS[@]} -gt 0 ]; then
+    echo -e "  ${YELLOW}${BOLD}⚠ Service/port konflik ditemukan:${NC}"
+    for c in "${CONFLICTS[@]}"; do
+        echo -e "    ${RED}◈${NC} $c"
+    done
+    echo ""
+    echo -e "  ${YELLOW}Installer akan menonaktifkan service tersebut untuk${NC}"
+    echo -e "  ${YELLOW}mencegah konflik port. Backup config akan dibuat.${NC}"
+    echo ""
+    echo -ne "  ${BOLD}Lanjutkan? [Y/n]:${NC} "
+    read -r CONFIRM
+    if [[ "$CONFIRM" =~ ^[Nn] ]]; then
+        echo -e "  ${RED}Dibatalkan oleh user.${NC}"
+        exit 1
+    fi
+
+    # Stop & disable conflicting services
+    for svc in systemd-resolved pihole-FTL adguardhome bind9 unbound stubby dnscrypt-proxy dnsmasq privoxy tinyproxy haproxy squid; do
+        if systemctl is-active --quiet "$svc" 2>/dev/null; then
+            # Backup config before disabling
+            case "$svc" in
+                dnsmasq)  [ -f /etc/dnsmasq.conf ] && cp /etc/dnsmasq.conf "/etc/dnsmasq.conf.bak.$(date +%Y%m%d%H%M%S)" ;;
+                squid)    [ -f /etc/squid/squid.conf ] && cp /etc/squid/squid.conf "/etc/squid/squid.conf.bak.$(date +%Y%m%d%H%M%S)" ;;
+                bind9)    [ -f /etc/bind/named.conf ] && cp /etc/bind/named.conf "/etc/bind/named.conf.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null || true ;;
+            esac
+            systemctl stop "$svc" 2>/dev/null || true
+            systemctl disable "$svc" 2>/dev/null || true
+            echo -e "  ${DIM}→ $svc dihentikan & dinonaktifkan${NC}"
+        fi
+    done
+    echo -e "  ${GREEN}✓ Konflik dibersihkan${NC}"
+else
+    echo -e "  ${GREEN}✓ Tidak ada konflik${NC}"
+fi
+echo ""
+
 # =============================================
 # STEP 1: INSTALL & CONFIGURE DNSMASQ + ADBLOCK
 # =============================================
 echo -e "${BLUE}${BOLD}━━━ [1/4] ADBLOCKER (dnsmasq) ━━━${NC}"
 
-init_progress 5
+init_progress 6
 
 # Install dnsmasq
 run_spinner "Menginstall dnsmasq" apt install -y dnsmasq
@@ -101,12 +196,6 @@ show_progress "dnsmasq terinstall"
 mkdir -p "$ADBLOCK_DIR"
 show_progress "Direktori adblock siap"
 
-# Matikan systemd-resolved jika ada (konflik port 53)
-if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
-    systemctl stop systemd-resolved 2>/dev/null || true
-    systemctl disable systemd-resolved 2>/dev/null || true
-    echo -e "  ${YELLOW}⚠ systemd-resolved dimatikan (konflik port 53)${NC}"
-fi
 show_progress "Port 53 siap"
 
 # Backup dnsmasq config
