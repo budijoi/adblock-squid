@@ -143,8 +143,14 @@ EOF
 show_progress "dnsmasq dikonfigurasi"
 
 # Download initial adblock lists
-echo -ne "  ${DIM}Download adblock lists${NC} "
-run_spinner "Mendownload adblock lists" bash "$(dirname "$0")/update-adblock.sh"
+ADBLOCK_UPDATER="/usr/local/bin/update-adblock.sh"
+if [ -f "$(dirname "$0")/update-adblock.sh" ]; then
+    cp "$(dirname "$0")/update-adblock.sh" "$ADBLOCK_UPDATER"
+    chmod +x "$ADBLOCK_UPDATER"
+elif [ -f "$ADBLOCK_UPDATER" ]; then
+    : # sudah ada
+fi
+run_spinner "Mendownload adblock lists" bash "$ADBLOCK_UPDATER"
 show_progress "Adblock lists siap"
 
 # Start dnsmasq
@@ -279,14 +285,13 @@ echo -e "${BLUE}${BOLD}━━━ [3/4] CRON JOB UPDATE ADBLOCK ━━━${NC}"
 
 init_progress 2
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CRON_SCHEDULE="0 3 * * *"  # Setiap jam 3 pagi
 
 # Hapus cron lama jika ada
 crontab -l 2>/dev/null | grep -v "update-adblock.sh" | crontab - 2>/dev/null || true
 
 # Tambah cron baru
-(crontab -l 2>/dev/null; echo "$CRON_SCHEDULE root $SCRIPT_DIR/update-adblock.sh") | crontab - 2>/dev/null || true
+(crontab -l 2>/dev/null; echo "$CRON_SCHEDULE root $ADBLOCK_UPDATER") | crontab - 2>/dev/null || true
 show_progress "Cron job terpasang (update setiap jam 3 pagi)"
 
 # Jalankan update-adblock.sh via cron path
@@ -354,7 +359,7 @@ echo -e "  ${BOLD}🔧 Perintah Berguna:${NC}"
 echo -e "    ${DIM}Cek dnsmasq  :${NC} sudo systemctl status dnsmasq"
 echo -e "    ${DIM}Cek Squid    :${NC} sudo systemctl status squid"
 echo -e "    ${DIM}Cek blokir   :${NC} sudo grep -c '^0.0.0.0' $ADBLOCK_LIST"
-echo -e "    ${DIM}Update adblk :${NC} sudo bash $(dirname "$0")/update-adblock.sh"
+echo -e "    ${DIM}Update adblk :${NC} sudo bash $ADBLOCK_UPDATER"
 echo -e "    ${DIM}Log update   :${NC} tail -f $ADBLOCK_LOG"
 echo -e "    ${DIM}Test adblock :${NC} nslookup doubleclick.net $IP_ADDR"
 echo -e "    ${DIM}Test proxy   :${NC} curl -I --proxy http://$IP_ADDR:3128 https://google.com"
