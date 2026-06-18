@@ -12,13 +12,16 @@ Semua request DNS dari perangkat lain akan dicegat oleh **dnsmasq**. Domain ikla
 
 ## Fitur
 
-- **DNS Adblocking** — blokir 2-3 juta domain iklan/tracker/malware dari 3 sumber terpercaya
+- **DNS Adblocking** — blokir 2-3 juta domain iklan/tracker/malware dari 4 sumber (termasuk ABPindo)
 - **DNS Caching** — percepat resolusi DNS hingga 10.000 domain
 - **Caching Proxy** — cache halaman web hingga 2 GB
 - **Auto-update** — adblock list diperbarui otomatis setiap jam 3 pagi
 - **Ringan** — hanya butuh ~100 MB RAM untuk dnsmasq + Squid
 - **Plug & Play** — set DNS dan/atau proxy di perangkat lain, langsung jalan
 - **Conflict Detection** — otomatis deteksi & nonaktifkan service lain (Pi-hole, Bind9, Privoxy, dll) yang bisa konflik
+- **Menu Installer** — pilih install Squid saja, AdBlock saja, atau keduanya
+- **Optimasi STB** — tuning kernel, TCP BBR, nonaktifkan service tidak perlu
+- **Uninstall** — hapus bersih Squid + AdBlock + konfigurasi
 
 ---
 
@@ -56,18 +59,18 @@ iface eth0 inet static
 
 ### 3. Download & Jalankan Installer
 
-SSH ke STB, download & jalankan langsung:
+SSH ke STB, download & jalankan:
 
 ```bash
 ssh root@192.168.1.100
 
-# Clone repo atau download file
+# Via git
 apt install -y git
 git clone https://github.com/budijoi/adblock-squid.git /tmp/adblock-squid
 sudo bash /tmp/adblock-squid/install.sh
 ```
 
-Atau pakai wget:
+Atau via wget:
 
 ```bash
 wget -O /tmp/install.sh https://raw.githubusercontent.com/budijoi/adblock-squid/main/install.sh
@@ -75,16 +78,21 @@ wget -O /tmp/update-adblock.sh https://raw.githubusercontent.com/budijoi/adblock
 sudo bash /tmp/install.sh
 ```
 
-Installer akan:
-0. **Deteksi konflik** — Pi-hole, AdGuard Home, Bind9, Unbound, systemd-resolved, Privoxy, dll → backup config & nonaktifkan
-1. Mendeteksi IP dan subnet LAN
-2. Install **dnsmasq** + konfigurasi adblock
-3. Install **Squid** dengan tuning cache
-4. Set Squid pakai dnsmasq sebagai DNS (adblock terbawa otomatis)
-5. Download adblock lists dari 3 sumber
-6. Buka firewall (port 53 DNS, port 3128 proxy)
-7. Pasang cron job update harian
-8. Verifikasi service berjalan
+### 4. Pilih Menu
+
+Installer akan menampilkan menu:
+
+```
+[1] Install Squid          (cache proxy saja)
+[2] Install AdBlock        (dnsmasq adblock saja)
+[3] Install Squid+AdBlock  (lengkap — cache + adblock)
+[4] Hapus Squid+AdBlock    (uninstall bersih)
+[5] Optimasi Perangkat     (tuning kernel, TCP BBR, dll)
+[6] Bersihkan Sistem       (hapus paket & file tidak dipakai)
+[0] Keluar
+```
+
+Pilih **3** untuk instalasi lengkap (Squid + AdBlock).
 
 ---
 
@@ -237,6 +245,7 @@ Sumber blocklist:
 | StevenBlack Unified | adware + malware + tracking | Harian |
 | someonewhocares.org | hosts-based blocking | Harian |
 | OISD Big | comprehensive domain block | Harian |
+| ABPindo | iklan Indonesia | Berkala |
 
 ---
 

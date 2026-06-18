@@ -26,6 +26,7 @@ SOURCES=(
     "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts"
     "https://someonewhocares.org/hosts/zero/hosts"
     "https://big.oisd.nl/domainswild"
+    "https://raw.githubusercontent.com/ABPindo/indonesianadblockrules/master/subscriptions/domain.txt"
 )
 
 TOTAL=0
@@ -54,9 +55,10 @@ shopt -s nullglob
 (
     cat "$TEMP_DIR"/source_*
 
-    if [ -f "$TEMP_DIR/source_2_domainswild" ]; then
-        sed 's/^/0.0.0.0 /' "$TEMP_DIR/source_2_domainswild"
-    fi
+    # Domain-only lists — tambah prefix 0.0.0.0
+    for domain_src in "$TEMP_DIR"/source_2_domainswild "$TEMP_DIR"/source_3_domain_txt; do
+        [ -f "$domain_src" ] && sed 's/^/0.0.0.0 /' "$domain_src"
+    done
 ) | grep -v -E '^#|^$|^255\.|^127\.0\.0\.1 localhost|^::1' | \
   awk '{print $1, $2}' | \
   grep -E '^0\.0\.0\.0\s+' | \
