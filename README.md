@@ -62,16 +62,15 @@ ssh root@192.168.1.100
 
 # Clone repo atau download file
 apt install -y git
-git clone https://github.com/<USER>/<REPO>.git /tmp/adblock-squid
+git clone https://github.com/budijoi/adblock-n-squid.git /tmp/adblock-squid
 sudo bash /tmp/adblock-squid/install.sh
 ```
 
 Atau pakai wget:
 
 ```bash
-ssh root@192.168.1.100
-wget -O /tmp/install.sh https://raw.githubusercontent.com/<USER>/<REPO>/main/install.sh
-wget -O /tmp/update-adblock.sh https://raw.githubusercontent.com/<USER>/<REPO>/main/update-adblock.sh
+wget -O /tmp/install.sh https://raw.githubusercontent.com/budijoi/adblock-n-squid/main/install.sh
+wget -O /tmp/update-adblock.sh https://raw.githubusercontent.com/budijoi/adblock-n-squid/main/update-adblock.sh
 sudo bash /tmp/install.sh
 ```
 
