@@ -38,6 +38,15 @@ run_spinner() {
     spinner $! "$msg"; wait $!; return $?
 }
 
+# === VARIABEL ===
+ADBLOCK_DIR="/etc/adblock"
+ADBLOCK_LIST="$ADBLOCK_DIR/blocked.hosts"
+ADBLOCK_LOG="/var/log/adblock-update.log"
+SQUID_CONF="/etc/squid/squid.conf"
+SQUID_BACKUP="/etc/squid/squid.conf.bak.adblock"
+DNSMASQ_CONF="/etc/dnsmasq.conf"
+ADBLOCK_UPDATER="/usr/local/bin/update-adblock.sh"
+
 # === BANNER ===
 clear
 echo ""
@@ -47,15 +56,6 @@ echo -e "  ${CYAN}║${NC}  ${BOLD}${MAGENTA}▄█▓▒░ADBLOCK░▒▓█�
 echo -e "  ${CYAN}║${NC}  ${BOLD}${MAGENTA}▀▐▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▌▀${NC}  ${BOLD}${YELLOW}for Armbian${NC}        ${CYAN}║${NC}"
 echo -e "  ${CYAN}╚═══════════════════════════════════════════╝${NC}"
 echo ""
-
-# === VARIABEL ===
-ADBLOCK_DIR="/etc/adblock"
-ADBLOCK_LIST="$ADBLOCK_DIR/blocked.hosts"
-ADBLOCK_LOG="/var/log/adblock-update.log"
-SQUID_CONF="/etc/squid/squid.conf"
-SQUID_BACKUP="/etc/squid/squid.conf.bak.adblock"
-DNSMASQ_CONF="/etc/dnsmasq.conf"
-DNSMASQ_ADBLOCK_CONF="/etc/dnsmasq.d/adblock.conf"
 
 # === DETEKSI SISTEM ===
 echo -e "${BLUE}${BOLD}━━━ SYSTEM INFORMATION ━━━${NC}"
@@ -84,6 +84,10 @@ else
     echo -e "${RED}No connection${NC}"
     echo -e "  ${YELLOW}⚠ Pastikan STB terhubung ke internet.${NC}"
 fi
+
+# Update apt sekali di awal
+echo -e "  ${DIM}Update apt :${NC}"
+run_spinner "Memperbarui package list" apt update -qq
 echo ""
 
 # === DETEKSI KONFLIK SERVICE ===
@@ -92,7 +96,6 @@ echo -e "${BLUE}${BOLD}━━━ CONFLICT DETECTION ━━━${NC}"
 detect_conflicts() {
     local conflicts=()
 
-    # DNS/adblock services (port 53)
     for svc in systemd-resolved pihole-FTL adguardhome bind9 unbound stubby dnscrypt-proxy dnsmasq; do
         if systemctl is-active --quiet "$svc" 2>/dev/null; then
             conflicts+=("$svc (running)")
@@ -101,7 +104,6 @@ detect_conflicts() {
         fi
     done
 
-    # Proxy services (port 3128)
     for svc in privoxy tinyproxy haproxy squid; do
         if systemctl is-active --quiet "$svc" 2>/dev/null; then
             conflicts+=("$svc (running)")
@@ -110,39 +112,33 @@ detect_conflicts() {
         fi
     done
 
-    # Pi-hole via binary check
     if command -v pihole &> /dev/null && ! systemctl is-enabled --quiet pihole-FTL 2>/dev/null; then
         conflicts+=("pihole (binary terinstall)")
     fi
 
-    # AdGuard Home via binary check
     if [ -f /opt/AdGuardHome/AdGuardHome ] && ! systemctl is-enabled --quiet adguardhome 2>/dev/null; then
         conflicts+=("AdGuard Home (binary terinstall)")
     fi
 
-    # Cek port occupancy (tanpa netstat/ss fallback)
-    local port53 port3128
+    # Cek port TCP dan UDP
+    local p53tcp p53udp p3128
     if command -v ss &> /dev/null; then
-        port53=$(ss -tlnp 2>/dev/null | grep ':53 ' | head -1)
-        port3128=$(ss -tlnp 2>/dev/null | grep ':3128 ' | head -1)
+        p53tcp=$(ss -tlnp 2>/dev/null | grep ':53 ')
+        p53udp=$(ss -ulnp 2>/dev/null | grep ':53 ')
+        p3128=$(ss -tlnp 2>/dev/null | grep ':3128 ')
     elif command -v netstat &> /dev/null; then
-        port53=$(netstat -tlnp 2>/dev/null | grep ':53 ' | head -1)
-        port3128=$(netstat -tlnp 2>/dev/null | grep ':3128 ' | head -1)
+        p53tcp=$(netstat -tlnp 2>/dev/null | grep ':53 ')
+        p53udp=$(netstat -ulnp 2>/dev/null | grep ':53 ')
+        p3128=$(netstat -tlnp 2>/dev/null | grep ':3128 ')
     fi
 
-    if [ -n "$port53" ]; then
-        local proc53
-        proc53=$(echo "$port53" | grep -oP 'pid=\K[0-9]+|users:\(\("\K[^"]+' | head -1)
-        conflicts+=("Port 53: $port53")
-    fi
-    if [ -n "$port3128" ]; then
-        conflicts+=("Port 3128: $port3128")
-    fi
+    [ -n "$p53tcp" ] && conflicts+=("Port 53 TCP: $p53tcp")
+    [ -n "$p53udp" ] && conflicts+=("Port 53 UDP: $p53udp")
+    [ -n "$p3128" ] && conflicts+=("Port 3128: $p3128")
 
     printf '%s\n' "${conflicts[@]}"
 }
 
-# Collect conflicts
 mapfile -t CONFLICTS < <(detect_conflicts)
 
 if [ ${#CONFLICTS[@]} -gt 0 ]; then
@@ -151,29 +147,25 @@ if [ ${#CONFLICTS[@]} -gt 0 ]; then
         echo -e "    ${RED}◈${NC} $c"
     done
     echo ""
-    echo -e "  ${YELLOW}Installer akan menonaktifkan service tersebut untuk${NC}"
-    echo -e "  ${YELLOW}mencegah konflik port. Backup config akan dibuat.${NC}"
+    echo -e "  ${YELLOW}Installer akan menonaktifkan service tersebut${NC}"
+    echo -e "  ${YELLOW}dan membackup konfigurasi yang ada.${NC}"
     echo ""
     echo -ne "  ${BOLD}Lanjutkan? [Y/n]:${NC} "
     read -r CONFIRM
     if [[ "$CONFIRM" =~ ^[Nn] ]]; then
-        echo -e "  ${RED}Dibatalkan oleh user.${NC}"
-        exit 1
+        echo -e "  ${RED}Dibatalkan oleh user.${NC}"; exit 1
     fi
 
-    # Stop & disable conflicting services
     for svc in systemd-resolved pihole-FTL adguardhome bind9 unbound stubby dnscrypt-proxy dnsmasq privoxy tinyproxy haproxy squid; do
         if systemctl is-active --quiet "$svc" 2>/dev/null; then
-            # Backup config before disabling
             case "$svc" in
-                dnsmasq)  [ -f /etc/dnsmasq.conf ] && cp /etc/dnsmasq.conf "/etc/dnsmasq.conf.bak.$(date +%Y%m%d%H%M%S)" ;;
-                squid)    [ -f /etc/squid/squid.conf ] && cp /etc/squid/squid.conf "/etc/squid/squid.conf.bak.$(date +%Y%m%d%H%M%S)" ;;
+                dnsmasq)  [ -f /etc/dnsmasq.conf ] && cp /etc/dnsmasq.conf "/etc/dnsmasq.conf.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null ;;
+                squid)    [ -f /etc/squid/squid.conf ] && cp /etc/squid/squid.conf "/etc/squid/squid.conf.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null ;;
                 bind9)    [ -f /etc/bind/named.conf ] && cp /etc/bind/named.conf "/etc/bind/named.conf.bak.$(date +%Y%m%d%H%M%S)" 2>/dev/null || true ;;
             esac
             systemctl stop "$svc" 2>/dev/null || true
-            # Paksa kill jika stop timeout (sering terjadi pada Squid)
             if systemctl is-active --quiet "$svc" 2>/dev/null; then
-                pkill -9 "$svc" 2>/dev/null || true
+                pkill -9 -x "$svc" 2>/dev/null || true
                 sleep 1
             fi
             systemctl disable "$svc" 2>/dev/null || true
@@ -190,93 +182,70 @@ echo ""
 # STEP 1: INSTALL & CONFIGURE DNSMASQ + ADBLOCK
 # =============================================
 echo -e "${BLUE}${BOLD}━━━ [1/4] ADBLOCKER (dnsmasq) ━━━${NC}"
-
 init_progress 6
 
-# Install dnsmasq
 run_spinner "Menginstall dnsmasq" apt install -y dnsmasq
 show_progress "dnsmasq terinstall"
 
-# Buat direktori adblock
 mkdir -p "$ADBLOCK_DIR"
 show_progress "Direktori adblock siap"
 
 show_progress "Port 53 siap"
 
-# Backup dnsmasq config
 [ -f "$DNSMASQ_CONF" ] && cp "$DNSMASQ_CONF" "${DNSMASQ_CONF}.bak.$(date +%Y%m%d%H%M%S)"
 mkdir -p /etc/dnsmasq.d
 
-# Tulis konfigurasi dnsmasq
 cat > "$DNSMASQ_CONF" << EOF
 # === Auto-generated dnsmasq config ===
-# Listen on all interfaces
 interface=$IFACE
 bind-interfaces
-
-# DNS
 domain-needed
 bogus-priv
 no-resolv
 server=1.1.1.1
 server=8.8.8.8
-
-# Cache DNS (percepat browsing)
 cache-size=10000
-
-# Adblock file
 addn-hosts=$ADBLOCK_LIST
-
-# Logging (opsional — comment untuk matikan)
 # log-queries
 # log-facility=/var/log/dnsmasq.log
 EOF
-
-# Konfigurasi Squid biar pake dnsmasq sebagai DNS
-# (akan ditambahkan nanti di konfigurasi Squid)
 show_progress "dnsmasq dikonfigurasi"
 
-# Download initial adblock lists
-ADBLOCK_UPDATER="/usr/local/bin/update-adblock.sh"
+# Copy updater ke lokasi permanen
 if [ -f "$(dirname "$0")/update-adblock.sh" ]; then
     cp "$(dirname "$0")/update-adblock.sh" "$ADBLOCK_UPDATER"
     chmod +x "$ADBLOCK_UPDATER"
-elif [ -f "$ADBLOCK_UPDATER" ]; then
-    : # sudah ada
+elif [ ! -f "$ADBLOCK_UPDATER" ]; then
+    echo -e "  ${YELLOW}⚠ update-adblock.sh tidak ditemukan. Download dari GitHub...${NC}"
+    curl -sSL -o "$ADBLOCK_UPDATER" "https://raw.githubusercontent.com/budijoi/adblock-n-squid/main/update-adblock.sh" 2>/dev/null && chmod +x "$ADBLOCK_UPDATER" || true
 fi
+
 run_spinner "Mendownload adblock lists" bash "$ADBLOCK_UPDATER"
 show_progress "Adblock lists siap"
 
-# Start dnsmasq
-run_spinner "Memulai dnsmasq" systemctl restart dnsmasq
-show_progress "dnsmasq berjalan"
-
+systemctl restart dnsmasq 2>/dev/null || systemctl start dnsmasq 2>/dev/null
 systemctl enable dnsmasq > /dev/null 2>&1 || true
+show_progress "dnsmasq berjalan"
 
 # =============================================
 # STEP 2: INSTALL & CONFIGURE SQUID CACHE
 # =============================================
 echo ""
 echo -e "${BLUE}${BOLD}━━━ [2/4] SQUID CACHE PROXY ━━━${NC}"
-
 init_progress 8
 
-# Install squid
 if ! command -v squid &> /dev/null; then
     run_spinner "Menginstall Squid" apt install -y squid
 fi
 show_progress "Squid terinstall"
 
-# Backup existing config
 if [ -f "$SQUID_CONF" ]; then
     cp "$SQUID_CONF" "$SQUID_BACKUP"
-    show_progress "Backup config Squid"
-else
-    show_progress "Tidak ada config lama"
 fi
+show_progress "Backup config Squid"
 
-# Cek apakah subnet sudah tercakup range RFC1918 (hindari warning Squid)
-subnet_covered_by_rfc1918() {
+# Helper: cek apakah subnet sudah tercakup range RFC1918
+subnet_covered() {
     case "$1" in
         10.*)           return 0 ;;
         192.168.*)      return 0 ;;
@@ -289,12 +258,10 @@ subnet_covered_by_rfc1918() {
     return 1
 }
 
-# Tulis konfigurasi Squid baru — dengan DNS指向 ke dnsmasq lokal
 cat > "$SQUID_CONF" << CONFEOFB
 # === Auto-generated Squid Config (AdBlock + Cache) ===
 # LAN: $SUBNET | IP: $IP_ADDR
 
-# ACL subnet lokal
 acl localnet src 0.0.0.1-0.255.255.255
 acl localnet src 10.0.0.0/8
 acl localnet src 100.64.0.0/10
@@ -305,14 +272,12 @@ acl localnet src fc00::/7
 acl localnet src fe80::/10
 CONFEOFB
 
-# Tambah subnet spesifik hanya jika tidak tercakup range di atas
-if ! subnet_covered_by_rfc1918 "$SUBNET"; then
+if ! subnet_covered "$SUBNET"; then
     echo "acl localnet src $SUBNET" >> "$SQUID_CONF"
 fi
 
 cat >> "$SQUID_CONF" << CONFEOFB
 
-# Port aman
 acl SSL_ports port 443
 acl Safe_ports port 80
 acl Safe_ports port 21
@@ -335,29 +300,23 @@ http_access deny to_linklocal
 http_access allow localnet
 http_access deny all
 
-# Port proxy
 http_port 3128
 
-# Cache settings — tuning untuk STB 1-2GB RAM
 cache_mem 256 MB
 maximum_object_size_in_memory 512 KB
 minimum_object_size 0 KB
 maximum_object_size 64 MB
 cache_dir ufs /var/spool/squid 2048 16 256
 
-# DNS — pakai dnsmasq lokal (adblock otomatis terbawa)
 dns_nameservers 127.0.0.1
 
-# Performance
 memory_replacement_policy heap GDSF
 cache_replacement_policy heap LFUDA
 
-# Logging
 access_log daemon:/var/log/squid/access.log squid
 cache_log /var/log/squid/cache.log
 coredump_dir /var/spool/squid
 
-# Refresh pattern
 refresh_pattern ^ftp:           1440    20%     10080
 refresh_pattern -i (/cgi-bin/|\?) 0     0%      0
 refresh_pattern .               0       20%     4320
@@ -365,26 +324,21 @@ CONFEOFB
 
 show_progress "Konfigurasi Squid ditulis"
 
-# Fix deprecated dns_order jika ada
 squid -k parse 2>/dev/null | grep -q "unrecognized.*dns_order" && \
     sed -i '/^dns_order/d' "$SQUID_CONF" 2>/dev/null || true
 show_progress "Validasi konfigurasi"
 
-# Setup direktori cache & log
 mkdir -p /var/log/squid
 chown proxy:proxy /var/log/squid 2>/dev/null || true
 show_progress "Direktori cache & log siap"
 
-# Inisialisasi cache
 squid -z > /dev/null 2>&1 || true
 show_progress "Inisialisasi cache"
 
-# Start service
 systemctl restart squid 2>/dev/null || systemctl start squid 2>/dev/null || true
 systemctl enable squid 2>/dev/null || true
 show_progress "Squid berjalan"
 
-# Firewall
 if command -v ufw &> /dev/null; then
     ufw allow 53/tcp comment 'dnsmasq DNS' > /dev/null 2>&1
     ufw allow 53/udp comment 'dnsmasq DNS' > /dev/null 2>&1
@@ -397,19 +351,12 @@ show_progress "Firewall: port 53 & 3128 dibuka"
 # =============================================
 echo ""
 echo -e "${BLUE}${BOLD}━━━ [3/4] CRON JOB UPDATE ADBLOCK ━━━${NC}"
-
 init_progress 2
 
-CRON_SCHEDULE="0 3 * * *"  # Setiap jam 3 pagi
+CRON_JOB="0 3 * * * $ADBLOCK_UPDATER"
+(crontab -l 2>/dev/null | grep -v "update-adblock.sh"; echo "$CRON_JOB") | crontab - 2>/dev/null || true
+show_progress "Cron job terpasang (setiap hari jam 03:00)"
 
-# Hapus cron lama jika ada
-crontab -l 2>/dev/null | grep -v "update-adblock.sh" | crontab - 2>/dev/null || true
-
-# Tambah cron baru
-(crontab -l 2>/dev/null; echo "$CRON_SCHEDULE root $ADBLOCK_UPDATER") | crontab - 2>/dev/null || true
-show_progress "Cron job terpasang (update setiap jam 3 pagi)"
-
-# Jalankan update-adblock.sh via cron path
 echo -e "  ${DIM}Next update :${NC} setiap hari jam 03:00"
 show_progress "Selesai"
 
@@ -418,59 +365,43 @@ show_progress "Selesai"
 # =============================================
 echo ""
 echo -e "${BLUE}${BOLD}━━━ [4/4] VERIFICATION ━━━${NC}"
-
 init_progress 3
 
 sleep 1
 
-# Cek dnsmasq
 DNSMASQ_OK=false
-if systemctl is-active --quiet dnsmasq 2>/dev/null; then
-    DNSMASQ_OK=true
-fi
+systemctl is-active --quiet dnsmasq 2>/dev/null && DNSMASQ_OK=true
 show_progress "Cek dnsmasq: $([ "$DNSMASQ_OK" = true ] && echo "${GREEN}✓ Running${NC}" || echo "${RED}✗ Error${NC}")"
 
-# Cek squid
 SQUID_OK=false
-if systemctl is-active --quiet squid 2>/dev/null; then
-    SQUID_OK=true
-fi
+systemctl is-active --quiet squid 2>/dev/null && SQUID_OK=true
 show_progress "Cek Squid: $([ "$SQUID_OK" = true ] && echo "${GREEN}✓ Running${NC}" || echo "${RED}✗ Error${NC}")"
 
-# Cek jumlah domain terblokir
 if [ -f "$ADBLOCK_LIST" ]; then
-    BLOCK_COUNT=$(grep -c "^0\.0\.0\.0\|^127\.0\.0\.1" "$ADBLOCK_LIST" 2>/dev/null || echo 0)
+    BLOCK_COUNT=$(grep -c "^0\.0\.0\.0" "$ADBLOCK_LIST" 2>/dev/null || echo 0)
 else
     BLOCK_COUNT=0
 fi
 show_progress "Domain terblokir: ${YELLOW}$BLOCK_COUNT${NC}"
 
 echo ""
-
-# === FINAL OUTPUT ===
 echo -e "${GREEN}${BOLD}══════════════════════════════════════════════${NC}"
 echo -e "${GREEN}${BOLD}       INSTALASI BERHASIL!${NC}"
 echo -e "${GREEN}${BOLD}══════════════════════════════════════════════${NC}"
 echo ""
-echo -e "  ${BOLD}📡 AdBlocker (DNS via dnsmasq)${NC}"
+echo -e "  ${BOLD}AdBlocker (DNS via dnsmasq)${NC}"
 echo -e "    ${DIM}DNS Server  :${NC} ${CYAN}$IP_ADDR${NC} (port 53)"
-echo -e "    ${DIM}Domain blok :${NC} ${YELLOW}$BLOCK_COUNT${NC} domain iklan/malware"
+echo -e "    ${DIM}Domain blok :${NC} ${YELLOW}$BLOCK_COUNT${NC} domain"
 echo ""
-echo -e "  ${BOLD}⚡ Caching Proxy (Squid)${NC}"
+echo -e "  ${BOLD}Caching Proxy (Squid)${NC}"
 echo -e "    ${DIM}Proxy       :${NC} ${CYAN}http://$IP_ADDR:3128${NC}"
 echo ""
-echo -e "  ${BOLD}📋 Cara Pengaturan di Perangkat Lain:${NC}"
+echo -e "  ${BOLD}Pengaturan Perangkat Lain:${NC}"
+echo -e "    ${YELLOW}A. DNS${NC} ${DIM}(adblock):${NC}     Set DNS → $IP_ADDR"
+echo -e "    ${YELLOW}B. Proxy${NC} ${DIM}(cache):${NC}    Set proxy → $IP_ADDR:3128"
+echo -e "    ${YELLOW}C. Keduanya${NC} ${DIM}(max):${NC}    A + B untuk adblock & cache"
 echo ""
-echo -e "  ${YELLOW}A. Set DNS (untuk adblock):${NC}"
-echo -e "     Settings > Network > DNS Manual > ${CYAN}$IP_ADDR${NC}"
-echo ""
-echo -e "  ${YELLOW}B. Set Proxy (untuk caching):${NC}"
-echo -e "     Settings > Proxy > ON"
-echo -e "     Address: ${CYAN}$IP_ADDR${NC}  Port: ${CYAN}3128${NC}"
-echo ""
-echo -e "  ${YELLOW}C. Atau keduanya — dapatkan adblock + cache!${NC}"
-echo ""
-echo -e "  ${BOLD}🔧 Perintah Berguna:${NC}"
+echo -e "  ${BOLD}Perintah Berguna:${NC}"
 echo -e "    ${DIM}Cek dnsmasq  :${NC} sudo systemctl status dnsmasq"
 echo -e "    ${DIM}Cek Squid    :${NC} sudo systemctl status squid"
 echo -e "    ${DIM}Cek blokir   :${NC} sudo grep -c '^0.0.0.0' $ADBLOCK_LIST"
@@ -481,8 +412,8 @@ echo -e "    ${DIM}Test proxy   :${NC} curl -I --proxy http://$IP_ADDR:3128 http
 echo ""
 
 if [ "$SQUID_OK" = false ] || [ "$DNSMASQ_OK" = false ]; then
-    echo -e "${RED}${BOLD}⚠ Ada service yang gagal. Cek log di atas.${NC}"
-    echo -e "  ${DIM}Jalankan:${NC} sudo journalctl -u dnsmasq --no-pager -n 20"
-    echo -e "  ${DIM}Jalankan:${NC} sudo journalctl -u squid --no-pager -n 20"
+    echo -e "${RED}${BOLD}⚠ Ada service yang gagal:${NC}"
+    [ "$DNSMASQ_OK" = false ] && echo -e "  ${RED}• dnsmasq${NC} → sudo journalctl -u dnsmasq --no-pager -n 30"
+    [ "$SQUID_OK" = false ] && echo -e "  ${RED}• squid${NC}   → sudo journalctl -u squid --no-pager -n 30"
     exit 1
 fi
