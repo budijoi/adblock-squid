@@ -153,6 +153,26 @@ apt_quick_update() {
     run_spinner "Memperbarui package list" apt update -qq
 }
 
+# Gunakan local dnsmasq sebagai DNS setelah service berjalan
+dns_use_local() {
+    chattr -i /etc/resolv.conf 2>/dev/null || true
+    cat > /etc/resolv.conf << 'LOCAL'
+nameserver 127.0.0.1
+nameserver 1.1.1.1
+LOCAL
+    chattr +i /etc/resolv.conf 2>/dev/null || true
+    echo -e "  ${GREEN}✓${NC} DNS → local dnsmasq (127.0.0.1)"
+}
+
+# Lepas proteksi resolv.conf (dipanggil saat uninstall)
+dns_unprotect() {
+    chattr -i /etc/resolv.conf 2>/dev/null || true
+    cat > /etc/resolv.conf << 'PUBLIC'
+nameserver 1.1.1.1
+nameserver 8.8.8.8
+PUBLIC
+}
+
 # =============================================
 # CONFLICT DETECTION
 # =============================================
@@ -187,6 +207,20 @@ detect_and_disable_conflicts() {
     echo -ne "  ${BOLD}Lanjutkan? [Y/n]:${NC} "
     read -r CONFIRM
     [[ "$CONFIRM" =~ ^[Nn] ]] && { echo -e "  ${RED}Batal.${NC}"; return 1; }
+
+    # DNS fallback: jika systemd-resolved akan dimatikan, set resolv.conf dulu
+    if systemctl is-active --quiet systemd-resolved 2>/dev/null; then
+        echo -e "  ${YELLOW}⚠ systemd-resolved akan dinonaktifkan. Memasang DNS fallback...${NC}"
+        rm -f /etc/resolv.conf
+        cat > /etc/resolv.conf << 'RESOLV'
+nameserver 1.1.1.1
+nameserver 8.8.8.8
+RESOLV
+        # Lindungi dari overwrite
+        chattr -i /etc/resolv.conf 2>/dev/null || true
+        chattr +i /etc/resolv.conf 2>/dev/null || true
+        echo -e "  ${GREEN}✓${NC} DNS fallback: 1.1.1.1, 8.8.8.8"
+    fi
 
     local svc_list=""
     [ "$filter" = "dns" ] || [ "$filter" = "all" ] && svc_list="$svc_list systemd-resolved pihole-FTL adguardhome bind9 unbound stubby dnscrypt-proxy dnsmasq"
@@ -349,6 +383,10 @@ EOF
     systemctl enable dnsmasq > /dev/null 2>&1 || true
     show_progress "Service start"
 
+    if systemctl is-active --quiet dnsmasq 2>/dev/null; then
+        dns_use_local
+    fi
+
     ufw_allow 53/tcp "dnsmasq DNS"
     ufw_allow 53/udp "dnsmasq DNS"
     show_progress "Firewall OK"
@@ -422,6 +460,10 @@ EOF
     systemctl restart dnsmasq 2>/dev/null || systemctl start dnsmasq 2>/dev/null
     systemctl enable dnsmasq > /dev/null 2>&1 || true
     show_progress "dnsmasq start"
+
+    if systemctl is-active --quiet dnsmasq 2>/dev/null; then
+        dns_use_local
+    fi
 
     # Config Squid
     [ -f "$SQUID_CONF" ] && cp "$SQUID_CONF" "${SQUID_CONF}.bak.$(date +%Y%m%d%H%M%S)"
@@ -572,6 +614,9 @@ uninstall_all() {
     ufw_deny 53/tcp
     ufw_deny 53/udp
     ufw_deny 3128/tcp
+
+    # Kembalikan DNS ke public
+    dns_unprotect
 
     echo ""
     echo -e "${GREEN}${BOLD}✓ Squid + AdBlock berhasil dihapus.${NC}"
